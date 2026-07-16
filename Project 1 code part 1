@@ -100,9 +100,16 @@ def main():
         print(df[['strand', 'frame', 'start', 'end', 'length']].head())
         print("\nExample protein sequence (first 50 aa):")
         print(df['protein'].iloc[0][:50] + "...")
+        print('\n--- additional statistics ---')
+        print('length statistics (bp):')
+        print(df['length'].describe().to_string())
+        print('\ncounts by strand:')
+        print(df['strand'].value_counts().to_string())
+        print('\ncounts by frame:')
+        print(df['frame'].value_counts().sort_index().to_string())
     else:
         print("No ORFs found in the test region.")
-#if orf's found, prints 5, if not, display error message. 
+#if orf's found, prints info, if not, display error message. 
 
 if __name__ == "__main__":
     main()
