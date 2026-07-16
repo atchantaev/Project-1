@@ -1,0 +1,109 @@
+import pandas as pd
+from Bio import SeqIO
+from Bio.Seq import Seq
+#creates a data table to format and sort the results, reads fasta files, provides seq which allows for reverse_complement
+
+def load_single_sequence(fasta_file):
+    record = next(SeqIO.parse(fasta_file, "fasta"))
+    return record.id, str(record.seq)
+#opens fasta file, grabs and records first record, records name, turns it into a plain string
+
+def get_codon_table():
+    codon_to_aa = {
+        'ATG': 'M', 'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
+        'TCT': 'S', 'TCC': 'S', 'TCA': 'S', 'TCG': 'S',
+        'TAT': 'Y', 'TAC': 'Y', 'TAA': '*', 'TAG': '*',
+        'TGT': 'C', 'TGC': 'C', 'TGA': '*', 'TGG': 'W',
+        'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
+        'CCT': 'P', 'CCC': 'P', 'CCA': 'P', 'CCG': 'P',
+        'CAT': 'H', 'CAC': 'H', 'CAA': 'Q', 'CAG': 'Q',
+        'CGT': 'R', 'CGC': 'R', 'CGA': 'R', 'CGG': 'R',
+        'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'ATG': 'M',
+        'ACT': 'T', 'ACC': 'T', 'ACA': 'T', 'ACG': 'T',
+        'AAT': 'N', 'AAC': 'N', 'AAA': 'K', 'AAG': 'K',
+        'AGT': 'S', 'AGC': 'S', 'AGA': 'R', 'AGG': 'R',
+        'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
+        'GCT': 'A', 'GCC': 'A', 'GCA': 'A', 'GCG': 'A',
+        'GAT': 'D', 'GAC': 'D', 'GAA': 'E', 'GAG': 'E',
+        'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G'
+    }
+    return codon_to_aa
+#creates a directory of 64 dna codons
+
+def reverse_complement(seq):
+    return str(Seq(seq).reverse_complement())
+#reverses order of bases and complements each base
+
+def translate_cds(cds, codon_table):
+    protein = []
+    for i in range(0, len(cds), 3):
+        codon = cds[i:i+3]
+        if len(codon) < 3:
+            break
+        aa = codon_table.get(codon, 'X')
+        if aa == '*':
+            break
+        protein.append(aa)
+    return ''.join(protein)
+#extracts base codons and starts list to collect amino acids
+
+def find_orfs_manual(sequence, frame, codon_table, strand='+', min_length=300):
+    orfs = []
+    seq_len = len(sequence)
+    for start in range(frame, seq_len - 2, 3):
+        if sequence[start:start+3] == 'ATG':
+            pos = start + 3
+            while pos + 2 < seq_len:
+                codon = sequence[pos:pos+3]
+                if codon in ['TAA', 'TAG', 'TGA']:
+                    cds = sequence[start:pos]
+                    if len(cds) >= min_length:
+                        protein = translate_cds(cds, codon_table)
+                        orfs.append({
+                            'strand': strand,
+                            'frame': frame,
+                            'start': start,
+                            'end': pos,
+                            'length': len(cds),
+                            'nucleotide': cds,
+                            'protein': protein
+                        })
+                    break
+                pos += 3
+    return orfs
+#creates an empty list to store orf's, checks to ensure 3 base pair codons, keeps looping as long as there are bases to read
+
+def main():
+    fasta_path = "GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
+    chr_name, dna = load_single_sequence(fasta_path)
+    print(f"Loaded {chr_name} with length {len(dna)} bp")
+    print("Scanning first 100,000 bases as a proof of concept...")
+    
+    test_seq = dna[:100000]
+    codon_table = get_codon_table()
+    all_orfs = []
+#specifies fasta file, loads chromosome, prints progress, scans 10k bases
+    
+    for frame in range(3):
+        all_orfs.extend(find_orfs_manual(test_seq, frame, codon_table, '+', 300))
+    
+    rev_seq = reverse_complement(test_seq)
+    for frame in range(3):
+        all_orfs.extend(find_orfs_manual(rev_seq, frame, codon_table, '-', 300))
+#scans all 6 reading frames (3 forward strands and 3 reverse strands)
+    
+    df = pd.DataFrame(all_orfs)
+    print(f"Found {len(df)} ORFs >= 300bp in the test region")
+#converts the list of ORF's into a table
+    if not df.empty:
+        print("\nTop 5 ORFs found:")
+        print(df[['strand', 'frame', 'start', 'end', 'length']].head())
+        print("\nExample protein sequence (first 50 aa):")
+        print(df['protein'].iloc[0][:50] + "...")
+    else:
+        print("No ORFs found in the test region.")
+#if orf's found, prints 5, if not, display error message. 
+
+if __name__ == "__main__":
+    main()
+#makes script runnable. 
