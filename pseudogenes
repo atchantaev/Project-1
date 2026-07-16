@@ -1,0 +1,174 @@
+import sys
+import os
+import gzip
+import io
+import pandas as pd
+from Bio import SeqIO
+from Bio.Seq import Seq
+
+# load sequences from a fasta file, even if it has weird comments
+def load_sequences(fasta_file):
+    if fasta_file.endswith('.gz'):
+        handle = gzip.open(fasta_file, 'rt')
+    else:
+        handle = open(fasta_file, 'r')
+    with handle:
+        lines = handle.readlines()
+    allowed = set('ACGTNURYSWKMBDHV-')
+    clean_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>'):
+            clean_lines.append(line)
+        elif all(c.upper() in allowed for c in line):
+            clean_lines.append(line)
+    if not clean_lines:
+        print('warning: no sequences found after filtering')
+        return []
+    fake_fasta = '\n'.join(clean_lines)
+    records = []
+    with io.StringIO(fake_fasta) as fh:
+        for record in SeqIO.parse(fh, 'fasta'):
+            records.append((record.id, str(record.seq)))
+    return records
+
+# the genetic code as a dictionary
+def get_codon_table():
+    codon_to_aa = {
+        'ATG': 'M', 'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
+        'TCT': 'S', 'TCC': 'S', 'TCA': 'S', 'TCG': 'S',
+        'TAT': 'Y', 'TAC': 'Y', 'TAA': '*', 'TAG': '*',
+        'TGT': 'C', 'TGC': 'C', 'TGA': '*', 'TGG': 'W',
+        'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
+        'CCT': 'P', 'CCC': 'P', 'CCA': 'P', 'CCG': 'P',
+        'CAT': 'H', 'CAC': 'H', 'CAA': 'Q', 'CAG': 'Q',
+        'CGT': 'R', 'CGC': 'R', 'CGA': 'R', 'CGG': 'R',
+        'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'ATG': 'M',
+        'ACT': 'T', 'ACC': 'T', 'ACA': 'T', 'ACG': 'T',
+        'AAT': 'N', 'AAC': 'N', 'AAA': 'K', 'AAG': 'K',
+        'AGT': 'S', 'AGC': 'S', 'AGA': 'R', 'AGG': 'R',
+        'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
+        'GCT': 'A', 'GCC': 'A', 'GCA': 'A', 'GCG': 'A',
+        'GAT': 'D', 'GAC': 'D', 'GAA': 'E', 'GAG': 'E',
+        'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G'
+    }
+    return codon_to_aa
+
+# reverse complement of a dna string
+def reverse_complement(seq):
+    return str(Seq(seq).reverse_complement())
+
+# translate a coding sequence into protein
+def translate_cds(cds, codon_table):
+    protein = []
+    for i in range(0, len(cds), 3):
+        codon = cds[i:i+3]
+        if len(codon) < 3:
+            break
+        aa = codon_table.get(codon, 'X')
+        if aa == '*':
+            break
+        protein.append(aa)
+    return ''.join(protein)
+
+# find all orfs in one frame on one strand
+def find_orfs_manual(sequence, frame, codon_table, strand='+', min_length=300):
+    orfs = []
+    seq_len = len(sequence)
+    for start in range(frame, seq_len - 2, 3):
+        if sequence[start:start+3] == 'ATG':
+            pos = start + 3
+            while pos + 2 < seq_len:
+                codon = sequence[pos:pos+3]
+                if codon in ['TAA', 'TAG', 'TGA']:
+                    cds = sequence[start:pos]
+                    if len(cds) >= min_length:
+                        protein = translate_cds(cds, codon_table)
+                        orfs.append({
+                            'strand': strand,
+                            'frame': frame,
+                            'start': start,
+                            'end': pos,
+                            'length': len(cds),
+                            'nucleotide': cds,
+                            'protein': protein
+                        })
+                    break
+                pos += 3
+    return orfs
+
+# main function that runs everything
+def main(fasta_path, min_length=300, limit=None):
+    records = load_sequences(fasta_path)
+    print(f'found {len(records)} sequence(s) in {fasta_path}')
+    codon_table = get_codon_table()
+    all_orfs = []
+
+    # process each sequence silently (no per‑sequence prints)
+    for seq_id, dna in records:
+        test_seq = dna if limit is None else dna[:limit]
+        # forward strand
+        for frame in range(3):
+            orfs = find_orfs_manual(test_seq, frame, codon_table, '+', min_length)
+            for orf in orfs:
+                orf['sequence_id'] = seq_id
+            all_orfs.extend(orfs)
+        # reverse strand
+        rev_seq = reverse_complement(test_seq)
+        for frame in range(3):
+            orfs = find_orfs_manual(rev_seq, frame, codon_table, '-', min_length)
+            for orf in orfs:
+                orf['sequence_id'] = seq_id
+            all_orfs.extend(orfs)
+
+    # turn the list into a dataframe
+    df = pd.DataFrame(all_orfs)
+    if not df.empty:
+        df = df[['sequence_id', 'strand', 'frame', 'start', 'end', 'length', 'nucleotide', 'protein']]
+        df = df.sort_values('length', ascending=False).reset_index(drop=True)
+    else:
+        df = pd.DataFrame(columns=['sequence_id', 'strand', 'frame', 'start', 'end', 'length', 'nucleotide', 'protein'])
+
+    # ----- final output (only summary) -----
+    print(f'\ntotal orfs found (>= {min_length}bp): {len(df)}')
+    if not df.empty:
+        print('\ntop 5 longest orfs:')
+        print(df[['sequence_id', 'strand', 'frame', 'start', 'end', 'length']].head())
+        print('\nexample protein sequence (first 50 aa):')
+        print(df['protein'].iloc[0][:50] + '...')
+
+        # extra statistics
+        print('\n--- additional statistics ---')
+        print('length statistics (bp):')
+        print(df['length'].describe().to_string())
+        print('\ncounts by strand:')
+        print(df['strand'].value_counts().to_string())
+        print('\ncounts by frame:')
+        print(df['frame'].value_counts().sort_index().to_string())
+    else:
+        print('no orfs found.')
+
+    # save to csv – use the same directory as the input file
+    base = os.path.basename(fasta_path)
+    if base.endswith('.gz'):
+        base = base[:-3]
+    for ext in ['.fna', '.fasta', '.fa']:
+        if base.endswith(ext):
+            base = base[:-len(ext)]
+            break
+    out_dir = os.path.dirname(fasta_path)
+    if not out_dir:
+        out_dir = os.getcwd()
+    output_csv = os.path.join(out_dir, base + '_orfs.csv')
+    df.to_csv(output_csv, index=False)
+    print(f'\nresults saved to {output_csv}')
+    return df
+
+# run the script – just set your file path below
+if __name__ == "__main__":
+    fasta_path = "gcf_000001405.40_grch38.p14_pseudo_without_product.fna.gz"
+    print(f'input file: {fasta_path}')
+    print('limit: none (full sequence)')
+    df = main(fasta_path, min_length=300, limit=None)
