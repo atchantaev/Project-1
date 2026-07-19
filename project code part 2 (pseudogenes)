@@ -131,7 +131,7 @@ def main(fasta_path, min_length=300, limit=None):
     else:
         df = pd.DataFrame(columns=['sequence_id', 'strand', 'frame', 'start', 'end', 'length', 'nucleotide', 'protein'])
 
-    
+    #  final output (only summary) 
     print(f'\ntotal orfs found (>= {min_length}bp): {len(df)}')
     if not df.empty:
         print('\ntop 5 longest orfs:')
@@ -150,7 +150,7 @@ def main(fasta_path, min_length=300, limit=None):
     else:
         print('no orfs found.')
 
-    # save to csv – use the same directory as the input file
+    # save to csv – but only the top 5 longest ORFs, with "top5_" prefix
     base = os.path.basename(fasta_path)
     if base.endswith('.gz'):
         base = base[:-3]
@@ -161,9 +161,10 @@ def main(fasta_path, min_length=300, limit=None):
     out_dir = os.path.dirname(fasta_path)
     if not out_dir:
         out_dir = os.getcwd()
-    output_csv = os.path.join(out_dir, base + '_orfs.csv')
-    df.to_csv(output_csv, index=False)
-    print(f'\nresults saved to {output_csv}')
+    # add "top5_" at the beginning of the filename
+    output_csv = os.path.join(out_dir, 'top5_' + base + '_orfs.csv')
+    df.head(5).to_csv(output_csv, index=False)
+    print(f'\nresults (top 5 only) saved to {output_csv}')
     return df
 
 # run the script – just set your file path below
