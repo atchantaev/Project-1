@@ -1,12 +1,14 @@
+import os
 import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
-#creates a data table to format and sort the results, reads fasta files, provides seq which allows for reverse_complement
+
+# creates a data table to format and sort the results, reads fasta files, provides seq which allows for reverse_complement
 
 def load_single_sequence(fasta_file):
     record = next(SeqIO.parse(fasta_file, "fasta"))
     return record.id, str(record.seq)
-#opens fasta file, grabs and records first record, records name, turns it into a plain string
+# opens fasta file, grabs and records first record, records name, turns it into a plain string
 
 def get_codon_table():
     codon_to_aa = {
@@ -28,11 +30,11 @@ def get_codon_table():
         'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G'
     }
     return codon_to_aa
-#creates a directory of 64 dna codons
+# creates a directory of 64 dna codons
 
 def reverse_complement(seq):
     return str(Seq(seq).reverse_complement())
-#reverses order of bases and complements each base
+# reverses order of bases and complements each base
 
 def translate_cds(cds, codon_table):
     protein = []
@@ -45,7 +47,7 @@ def translate_cds(cds, codon_table):
             break
         protein.append(aa)
     return ''.join(protein)
-#extracts base codons and starts list to collect amino acids
+# extracts base codons and starts list to collect amino acids
 
 def find_orfs_manual(sequence, frame, codon_table, strand='+', min_length=300):
     orfs = []
@@ -71,18 +73,18 @@ def find_orfs_manual(sequence, frame, codon_table, strand='+', min_length=300):
                     break
                 pos += 3
     return orfs
-#creates an empty list to store orf's, checks to ensure 3 base pair codons, keeps looping as long as there are bases to read
+# creates an empty list to store orf's, checks to ensure 3 base pair codons, keeps looping as long as there are bases to read
 
 def main():
     fasta_path = "GCF_009914755.1_T2T-CHM13v2.0_genomic.fna"
     chr_name, dna = load_single_sequence(fasta_path)
-    print(f"Loaded {chr_name} with length {len(dna)} bp")
+    print(f"input file: {chr_name}")
     print("Scanning first 100,000 bases as a proof of concept...")
     
     test_seq = dna[:100000]
     codon_table = get_codon_table()
     all_orfs = []
-#specifies fasta file, loads chromosome, prints progress, scans 10k bases
+# specifies fasta file, loads chromosome, prints progress, scans 10k bases
     
     for frame in range(3):
         all_orfs.extend(find_orfs_manual(test_seq, frame, codon_table, '+', 300))
@@ -90,16 +92,21 @@ def main():
     rev_seq = reverse_complement(test_seq)
     for frame in range(3):
         all_orfs.extend(find_orfs_manual(rev_seq, frame, codon_table, '-', 300))
-#scans all 6 reading frames (3 forward strands and 3 reverse strands)
+# scans all 6 reading frames (3 forward strands and 3 reverse strands)
     
     df = pd.DataFrame(all_orfs)
-    print(f"Found {len(df)} ORFs >= 300bp in the test region")
-#converts the list of ORF's into a table
+    print(f"\nFound {len(df)} ORFs >= 300bp in the test region")
+# converts the list of ORF's into a table
+
     if not df.empty:
+        # sort by length (longest first)
+        df = df.sort_values('length', ascending=False).reset_index(drop=True)
+        
         print("\nTop 5 ORFs found:")
         print(df[['strand', 'frame', 'start', 'end', 'length']].head())
         print("\nExample protein sequence (first 50 aa):")
         print(df['protein'].iloc[0][:50] + "...")
+        
         print('\n--- additional statistics ---')
         print('length statistics (bp):')
         print(df['length'].describe().to_string())
@@ -107,10 +114,23 @@ def main():
         print(df['strand'].value_counts().to_string())
         print('\ncounts by frame:')
         print(df['frame'].value_counts().sort_index().to_string())
+        
+        # save top 5 to csv
+        base = os.path.basename(fasta_path)
+        for ext in ['.fna', '.fasta', '.fa']:
+            if base.endswith(ext):
+                base = base[:-len(ext)]
+                break
+        out_dir = os.path.dirname(fasta_path)
+        if not out_dir:
+            out_dir = os.getcwd()
+        output_csv = os.path.join(out_dir, 'top5_' + base + '_orfs.csv')
+        df.head(5).to_csv(output_csv, index=False)
+        print(f'\nresults (top 5 only) saved to {output_csv}')
     else:
         print("No ORFs found in the test region.")
-#if orf's found, prints info, if not, display error message. 
+# if orf's found, prints info, saves top 5 to csv; if not, display error message.
 
 if __name__ == "__main__":
     main()
-#makes script runnable. 
+# makes script runnable.
