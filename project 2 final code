@@ -102,7 +102,6 @@ def translate_cds(cds, codon_table):
 
 print("Cell 1 complete", flush=True)
 
-
 def find_orfs_manual(sequence, frame, codon_table, strand='+', min_length=300):
     orfs = []
     seq_len = len(sequence)
@@ -183,36 +182,153 @@ def process_file(fasta_path, label, min_length=300, limit=None, max_records=None
     else:
         print('no orfs found.')
     
-    output_csv = f'top5_{label}_orfs.csv'
-    if not df.empty:
-        df.head(5).to_csv(output_csv, index=False)
-        print(f'\nresults (top 5 only) saved to {output_csv}', flush=True)
-    else:
-        print('\nno results to save')
     
     return df
 
 print("Cell 3 complete", flush=True)
 
-
 files_to_process = [
-    ("GCF_009914755.1_T2T-CHM13v2.0_genomic.fna", "human_genes", 20000000, 2),   # 20M bases, all chromosomes
-    ("gcf_000001405.40_grch38.p14_pseudo_without_product.fna.gz", "human_pseudogenes", None, None),   # all pseudogenes
-    # add more species here, e.g.
-    # ("soontobefile.fna", "species1_genes", None, None),
+    ("GCF_009914755.1_T2T-CHM13v2.0_genomic.fna", "human_genes", 500000, None),
+    ("gcf_000001405.40_grch38.p14_pseudo_without_product.fna.gz", "human_pseudogenes", None, None),
+    ("GCF_028858775.2_NHGRI_mPanTro3-v2.1_pri_cds_from_genomic.fna.gz", "chimp_genes", 500000, 1),
+    ("GCF_028858775.2_NHGRI_mPanTro3-v2.1_pri_pseudo_without_product.fna.gz", "chimp_pseudogenes", None, None),
+    ("GCF_036850995.1_mSacLep1_pri_phased_curated_cds_from_genomic.fna.gz", "bat_genes", 500000, 0),
+    ("GCF_036850995.1_mSacLep1_pri_phased_curated_pseudo_without_product.fna.gz", "bat_pseudogenes", None, None),
 ]
 
-all_results = {}
+all_dfs = {}
+all_top5 = {}     
+all_stats = {}
+
 for fasta_path, label, limit, max_records in files_to_process:
     if not os.path.exists(fasta_path):
         print(f"file not found – {fasta_path} (skipping)", flush=True)
         continue
     df = process_file(fasta_path, label, min_length=300, limit=limit, max_records=max_records)
-    all_results[label] = df
+    
+    # store full DataFrame
+    all_dfs[label] = df
+    
+    # top 5 ORFs
+    if not df.empty:
+        all_top5[label] = df.head(5)
+    else:
+        all_top5[label] = pd.DataFrame(columns=['sequence_id', 'strand', 'frame', 'start', 'end', 'length', 'nucleotide', 'protein'])
+    
+    # stats summary for this dataset
+    if not df.empty:
+        stats = {}
+        stats['Total ORFs'] = len(df)
+        stats['Mean length'] = df['length'].mean()
+        stats['Median length'] = df['length'].median()
+        stats['Std length'] = df['length'].std()
+        stats['Min length'] = df['length'].min()
+        stats['Max length'] = df['length'].max()
+        stats['Forward strand count'] = df[df['strand'] == '+'].shape[0]
+        stats['Reverse strand count'] = df[df['strand'] == '-'].shape[0]
+        stats['Frame 0 count'] = df[df['frame'] == 0].shape[0]
+        stats['Frame 1 count'] = df[df['frame'] == 1].shape[0]
+        stats['Frame 2 count'] = df[df['frame'] == 2].shape[0]
+        all_stats[label] = pd.DataFrame([stats])
+    else:
+        all_stats[label] = pd.DataFrame([{'Total ORFs': 0, 'Mean length': None, 'Median length': None,
+                                          'Std length': None, 'Min length': None, 'Max length': None,
+                                          'Forward strand count': 0, 'Reverse strand count': 0,
+                                          'Frame 0 count': 0, 'Frame 1 count': 0, 'Frame 2 count': 0}])
+
+output_excel = "all_orf_results.xlsx"
+with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+    # write each dataset's top 5
+    for label, df_top5 in all_top5.items():
+        df_top5.to_excel(writer, sheet_name=label, index=False)
+    
+    # write a summary sheet with all stats combined
+    summary_df = pd.concat(all_stats.values(), keys=all_stats.keys()).reset_index(level=0).rename(columns={'level_0': 'Dataset'})
+    summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
 print("\n" + "="*60)
 print("done processing all files!")
 print("="*60)
-print(f"processed {len(all_results)} dataset(s)")
-for label, df in all_results.items():
-    print(f"  {label}: {len(df)} ORFs found")
+print(f"processed {len(all_top5)} dataset(s)")
+for label, df_top5 in all_top5.items():
+    total = len(all_dfs[label]) if label in all_dfs else 0
+    print(f"  {label}: {len(df_top5)} top ORFs saved (total found: {total})")
+print(f"\nAll results saved to: {output_excel}")
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set style
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = (10, 6)
+
+# -------------------------------
+# Figure 1: Total ORFs per dataset
+# -------------------------------
+datasets = ['Human Genes', 'Human Pseudo', 'Chimp Pseudo', 'Bat Pseudo']
+orfs = [17279, 33131, 29202, 31843]
+
+plt.figure(figsize=(8,5))
+bars = plt.bar(datasets, orfs, color=['#2E86C1', '#E74C3C', '#F39C12', '#27AE60'])
+plt.ylabel('Number of ORFs')
+plt.title('Total ORFs Found in Each Dataset')
+plt.xticks(rotation=15)
+for bar, val in zip(bars, orfs):
+    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 500, f'{val:,}', ha='center', va='bottom')
+plt.tight_layout()
+plt.savefig('figure1_total_orfs.png', dpi=300)
+plt.show()
+
+import pandas as pd
+
+# Combine all datasets into one DataFrame with a 'group' column
+length_data = pd.concat([
+    df_human_genes[['length']].assign(Group='Human Genes').reset_index(drop=True),
+    df_human_pseudogenes[['length']].assign(Group='Human Pseudo').reset_index(drop=True),
+    df_chimp_pseudogenes[['length']].assign(Group='Chimp Pseudo').reset_index(drop=True),
+    df_bat_pseudogenes[['length']].assign(Group='Bat Pseudo').reset_index(drop=True)
+], ignore_index=True)
+
+plt.figure(figsize=(10,6))
+sns.boxplot(data=length_data, x='Group', y='length')
+plt.ylabel('ORF Length (bp)')
+plt.title('Distribution of ORF Lengths by Dataset')
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.savefig('figure2_length_boxplot.png', dpi=300)
+plt.show()
+
+strand_data = {
+    'Dataset': ['Human Genes', 'Human Pseudo', 'Chimp Pseudo', 'Bat Pseudo'],
+    'Forward': [10342, 22719, 18670, 18479],
+    'Reverse': [6937, 10412, 10532, 13364]
+}
+strand_df = pd.DataFrame(strand_data)
+strand_df.set_index('Dataset', inplace=True)
+
+strand_df.plot(kind='bar', stacked=True, color=['#2E86C1', '#E74C3C'])
+plt.ylabel('Number of ORFs')
+plt.title('Strand Bias Across Datasets')
+plt.xticks(rotation=15)
+plt.legend(title='Strand')
+plt.tight_layout()
+plt.savefig('figure3_strand_bias.png', dpi=300)
+plt.show()
+
+frame_data = {
+    'Dataset': ['Human Genes', 'Human Pseudo', 'Chimp Pseudo', 'Bat Pseudo'],
+    'Frame 0': [5810, 11746, 10561, 11292],
+    'Frame 1': [5765, 11057, 9337, 10200],
+    'Frame 2': [5704, 10328, 9304, 10351]
+}
+frame_df = pd.DataFrame(frame_data)
+frame_df.set_index('Dataset', inplace=True)
+
+frame_df.plot(kind='bar', color=['#3498DB', '#2ECC71', '#F1C40F'])
+plt.ylabel('Number of ORFs')
+plt.title('Reading Frame Distribution Across Datasets')
+plt.xticks(rotation=15)
+plt.legend(title='Frame')
+plt.tight_layout()
+plt.savefig('figure4_frame_distribution.png', dpi=300)
+plt.show()
